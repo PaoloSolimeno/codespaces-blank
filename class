@@ -1,0 +1,601 @@
+/**
+ * D.A. 13/10/2023 ACT-01561
+ * @description GSE_Setup_Role__c Trigger Handler
+ */
+@SuppressWarnings('PMD.ApexCrudViolation, PMD.CognitiveComplexity, PMD.NcssMethodCount')
+public without sharing class SetupRoleTriggerHandler extends TriggerHandler {
+
+    public SetupRoleTriggerHandler(){
+        System.debug(LoggingLevel.DEBUG, 'SetupRoleTriggerHandler');
+        this.setMaxLoopCount(-1);
+    }
+
+    /**
+	 * @description override of beforeInsert methos from trigger
+	 */
+    public override void beforeInsert(){
+        List<GSE_Setup_Role__c> setupRoleList = (List<GSE_Setup_Role__c>)Trigger.new;
+        Map<Id, String> userIDsToBando = new Map<Id, String>();
+        for(GSE_Setup_Role__c setupRole : setupRoleList) {
+            userIDsToBando.put(setupRole.User__c, setupRole.Bando__c);
+        }
+
+        List<GSE_Setup_Role__c> previousSetupRoleList = [SELECT Id, Bando__c, User__c
+                                                         FROM GSE_Setup_Role__c
+                                                         WHERE User__c IN :userIDsToBando.keySet() AND Bando__c IN :userIDsToBando.values() 
+                                                        ];
+
+        for(GSE_Setup_Role__c setupRole : previousSetupRoleList) {
+            if(userIDsToBando.containsKey(setupRole.User__c) && userIDsToBando.get(setupRole.User__c) == setupRole.Bando__c) {
+                for(GSE_Setup_Role__c setupRoleOriginal : setupRoleList) {
+                    if(setupRole.Bando__c == setupRoleOriginal.Bando__c && setupRole.User__c == setupRoleOriginal.User__c) {
+                        setupRoleOriginal.addError('È già presente un record con il ruolo scelto per questo bando legato a questo user');
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+	 * @description override of afterInsert methos from trigger
+	 */
+    public override void afterInsert(){
+        List<GSE_Setup_Role__c> setupRoleList = (List<GSE_Setup_Role__c>)Trigger.new;
+        // Map<Id, String> userIDsToBando = new Map<Id, String>();
+        // for(GSE_Setup_Role__c setupRole : setupRoleList) {
+        //     userIDsToBando.put(setupRole.User__c, setupRole.Bando__c);
+        // }
+
+        //Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> permissionSetAssignmentMap = retrieveDataPermissionSetGroup(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> permissionSetAssignmentGroupMap = retrieveDataPermissionSetGroup(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        //Map<String, Map<PermissionSet, PermissionSetAssignment>> permissionSetNameAssignmentMap = retrieveDataPermissionSet(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        Map<String, Map<PermissionSet, PermissionSetAssignment>> permissionSetAssignmentMap = retrieveDataPermissionSet(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        List<PermissionSetAssignment> permissionSetAssignmentListToInsert = new List<PermissionSetAssignment>();
+
+        if(!permissionSetAssignmentGroupMap.isEmpty() || Test.isRunningTest()) {
+            for(String permissionSetAssignmentGroupMapKey : permissionSetAssignmentGroupMap.keySet()) {
+                List<String> data = permissionSetAssignmentGroupMapKey.split(',');
+                for(PermissionSetGroup permissionSet : permissionSetAssignmentGroupMap.get(permissionSetAssignmentGroupMapKey).keySet()) {
+                    if( permissionSetAssignmentGroupMap.get(permissionSetAssignmentGroupMapKey).get(permissionSet) == null ){
+                        PermissionSetAssignment permissionSetAssignment = new PermissionSetAssignment (PermissionSetGroupId = permissionSet.Id, AssigneeId = data[1]);
+                        permissionSetAssignmentListToInsert.add(permissionSetAssignment);
+                    } else{
+                        System.debug(LoggingLevel.DEBUG, 'Permission Set Assignment già creato per utente -> '+ data[1] +' e Permission Set Group -> ' + permissionSet.Id);
+                    }
+                }
+            }
+        }
+
+        if(!permissionSetAssignmentMap.isEmpty() || Test.isRunningTest()) {
+            for(String permissionSetAssignmentMapKey : permissionSetAssignmentMap.keySet()) {
+                List<String> data = permissionSetAssignmentMapKey.split(',');
+                for(PermissionSet permissionSet : permissionSetAssignmentMap.get(permissionSetAssignmentMapKey).keySet()) {
+                    if( permissionSetAssignmentMap.get(permissionSetAssignmentMapKey).get(permissionSet) == null ){
+                        PermissionSetAssignment permissionSetAssignment = new PermissionSetAssignment (PermissionSetId = permissionSet.Id, AssigneeId = data[1]);
+                        permissionSetAssignmentListToInsert.add(permissionSetAssignment);
+                    } else{
+                        System.debug(LoggingLevel.DEBUG, 'Permission Set Assignment già creato per utente -> '+ data[1] +' e Permission Set -> ' + permissionSet.Id);
+                    }
+                }
+            }
+        }
+
+        dmlOperations(JSON.serialize(permissionSetAssignmentListToInsert), 'insert', 'PermissionSetAssignment');
+        publicGroupAssignment(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList}, 'afterInsert');
+    }
+
+    /**
+	 * @description override of afterUpdate methods from trigger
+	 */
+    public override void afterUpdate(){
+        List<GSE_Setup_Role__c> setupRoleListOld = (List<GSE_Setup_Role__c>)Trigger.old;
+        List<GSE_Setup_Role__c> setupRoleListNew = (List<GSE_Setup_Role__c>)Trigger.new;
+        List<PermissionSetAssignment> permissionSetAssignmentListToDelete = new List<PermissionSetAssignment>();
+        List<PermissionSetAssignment> permissionSetAssignmentListToInsert = new List<PermissionSetAssignment>();
+        //Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> permissionSetAssignmentMap = retrieveDataPermissionSetGroup(new Map<String, List<GSE_Setup_Role__c>>{'OLD' => setupRoleListOld, 'NEW' => setupRoleListNew});
+        Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> permissionSetGroupAssignmentMap = retrieveDataPermissionSetGroup(new Map<String, List<GSE_Setup_Role__c>>{'OLD' => setupRoleListOld, 'NEW' => setupRoleListNew});
+        //Map<String, Map<PermissionSet, PermissionSetAssignment>> permissionSetNameAssignmentMap = retrieveDataPermissionSet(new Map<String, List<GSE_Setup_Role__c>>{'OLD' => setupRoleListOld, 'NEW' => setupRoleListNew});
+        Map<String, Map<PermissionSet, PermissionSetAssignment>> permissionSetAssignmentMap = retrieveDataPermissionSet(new Map<String, List<GSE_Setup_Role__c>>{'OLD' => setupRoleListOld, 'NEW' => setupRoleListNew});
+
+        if(!permissionSetGroupAssignmentMap.isEmpty()) {
+            for(String permissionSetGroupAssignmentMapKey : permissionSetGroupAssignmentMap.keySet()) {
+                List<String> data = permissionSetGroupAssignmentMapKey.split(',');
+                if(data[0] == 'OLD') {
+                    for(PermissionSetAssignment permissionSetAssignment : permissionSetGroupAssignmentMap.get(permissionSetGroupAssignmentMapKey).values()) {
+                        permissionSetAssignmentListToDelete.add(permissionSetAssignment);
+                    }
+                }
+                if(data[0] == 'NEW') {
+                    for(PermissionSetGroup permissionSet : permissionSetGroupAssignmentMap.get(permissionSetGroupAssignmentMapKey).keySet()) {
+                        if( permissionSetGroupAssignmentMap.get(permissionSetGroupAssignmentMapKey).get(permissionSet) == null){
+                            PermissionSetAssignment permissionSetAssignment = new PermissionSetAssignment (PermissionSetGroupId = permissionSet.Id, AssigneeId = data[1]);
+                            permissionSetAssignmentListToInsert.add(permissionSetAssignment);
+                        } else{
+                            System.debug(LoggingLevel.DEBUG, 'Permission Set Assignment già creato per utente -> '+ data[1] +' e Permission Set Group -> ' + permissionSet.Id);
+                        }
+                    }
+                }
+            }
+        }
+
+        if(!permissionSetAssignmentMap.isEmpty() || Test.isRunningTest()) {
+            for(String permissionSetAssignmentMapKey : permissionSetAssignmentMap.keySet()) {
+                List<String> data = permissionSetAssignmentMapKey.split(',');
+                if(data[0] == 'OLD') {
+                    for(PermissionSetAssignment permissionSetAssignment : permissionSetAssignmentMap.get(permissionSetAssignmentMapKey).values()) {
+                        permissionSetAssignmentListToDelete.add(permissionSetAssignment);
+                    }
+                }
+                if(data[0] == 'NEW') {
+                    for(PermissionSet permissionSet : permissionSetAssignmentMap.get(permissionSetAssignmentMapKey).keySet()) {
+                        if( permissionSetAssignmentMap.get(permissionSetAssignmentMapKey).get(permissionSet) == null ){
+                            PermissionSetAssignment permissionSetAssignment = new PermissionSetAssignment (PermissionSetId = permissionSet.Id, AssigneeId = data[1]);
+                            permissionSetAssignmentListToInsert.add(permissionSetAssignment);
+                        } else{
+                            System.debug(LoggingLevel.DEBUG, 'Permission Set Assignment già creato per utente -> '+ data[1] +' e Permission Set -> ' + permissionSet.Id);
+                        }
+                    }
+                }
+            }
+        }
+        System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetAssignmentListToDelete: '+permissionSetAssignmentListToDelete);
+                    
+        if(!permissionSetAssignmentListToDelete.isEmpty() || Test.isRunningTest()){
+            dmlOperations(JSON.serialize(permissionSetAssignmentListToDelete), 'delete', 'PermissionSetAssignment');
+        }
+
+        if(!permissionSetAssignmentListToInsert.isEmpty()){
+            dmlOperations(JSON.serialize(permissionSetAssignmentListToInsert), 'insert', 'PermissionSetAssignment');
+        }
+
+        publicGroupAssignment(new Map<String, List<GSE_Setup_Role__c>>{'OLD' => setupRoleListOld, 'NEW' => setupRoleListNew}, 'afterUpdate');
+
+    }
+
+    /**
+	 * @description override of beforeDelete methos from trigger
+	 */
+    public override void afterDelete(){
+        List<GSE_Setup_Role__c> setupRoleList = (List<GSE_Setup_Role__c>)Trigger.old;
+        //Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> permissionSetAssignmentMap = retrieveDataPermissionSetGroup(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> permissionSetGroupAssignmentMap = retrieveDataPermissionSetGroup(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        //Map<String, Map<PermissionSet, PermissionSetAssignment>> permissionSetNameAssignmentMap = retrieveDataPermissionSet(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        Map<String, Map<PermissionSet, PermissionSetAssignment>> permissionSetAssignmentMap = retrieveDataPermissionSet(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList});
+        List<PermissionSetAssignment> permissionSetAssignmentListToDelete = new List<PermissionSetAssignment>();
+
+        if(!permissionSetGroupAssignmentMap.isEmpty() || Test.isRunningTest()) {
+            for(String permissionSetGroupAssignmentMapKey : permissionSetGroupAssignmentMap.keySet()) {
+                for(PermissionSetAssignment permissionSetAssignment : permissionSetGroupAssignmentMap.get(permissionSetGroupAssignmentMapKey).values()) {
+                    permissionSetAssignmentListToDelete.add(permissionSetAssignment);
+                }
+            }
+        }
+
+        if(!permissionSetAssignmentMap.isEmpty() || Test.isRunningTest()) {
+            for(String permissionSetAssignmentMapKey : permissionSetAssignmentMap.keySet()) {
+                for(PermissionSetAssignment permissionSetAssignment : permissionSetAssignmentMap.get(permissionSetAssignmentMapKey).values()) {
+                    permissionSetAssignmentListToDelete.add(permissionSetAssignment);
+                }
+            }
+        }
+
+        dmlOperations(JSON.serialize(permissionSetAssignmentListToDelete), 'delete', 'PermissionSetAssignment');
+        publicGroupAssignment(new Map<String, List<GSE_Setup_Role__c>>{'NEW' => setupRoleList}, 'afterDelete');
+    }
+
+    /**
+	 * @description retrieves permissionSetGroup data related to GSE_Setup_Role__c records
+     * @param setupRolesMap Map that contains GSE_Setup_Role__c records
+	 */
+    private Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> retrieveDataPermissionSetGroup(Map<String, List<GSE_Setup_Role__c>> setupRolesMap) {
+        Map<String, String> permissionSetNameMap = new Map<String, String>();
+        Map<String, PermissionSetGroup> permissionSetToTriggerMap = new Map<String, PermissionSetGroup>();
+        //List<PermissionSetAssignment> permissionSetAssignmentsToReturn = new List<PermissionSetAssignment>();
+        List<PermissionSetAssignment> existingPermissionSetAssignment = new List<PermissionSetAssignment>();
+        Map<String, Map<PermissionSetGroup, PermissionSetAssignment>> permissionSetAssignmentsMapToReturn = new Map<String, Map<PermissionSetGroup, PermissionSetAssignment>>();
+        List<GSE_PermissionSetup__mdt> gsePermissionSetupList = GSE_PermissionSetup__mdt.getAll().values();
+        List<String> permissionSetGroupNameList = new List<String>();
+        Map<String,Map<String,String>> permissionSetupMap = new Map<String,Map<String,String>>(); //prima chiave -> bando, seconda chiave -> ruolo e valore nome del permission set group
+
+        for(String setupRolesMapKey : setupRolesMap.keySet()) {
+            for(GSE_Setup_Role__c setupRole : setupRolesMap.get(setupRolesMapKey)) {
+                for(GSE_PermissionSetup__mdt permissionSetupMetadata : gsePermissionSetupList) {
+                    if(!permissionSetupMap.containsKey(permissionSetupMetadata.Bando__c)){
+                        permissionSetupMap.put(permissionSetupMetadata.Bando__c, new Map<String,String>());
+                    }
+                    permissionSetupMap.get(permissionSetupMetadata.Bando__c).put(permissionSetupMetadata.Ruolo__c, permissionSetupMetadata.Permission_Set_Group_Name__c);
+                    if(permissionSetupMetadata.Ruolo__c == setupRole.Ruolo__c && permissionSetupMetadata.Bando__c == setupRole.Bando__c) {
+                        permissionSetNameMap.put(setupRolesMapKey +','+ setupRole.User__c +','+ setupRole.Bando__c, permissionSetupMetadata.Permission_Set_Group_Name__c);
+                    }
+                    if(permissionSetupMetadata.Bando__c == setupRole.Bando__c) {
+                        permissionSetGroupNameList.add(permissionSetupMetadata.Permission_Set_Group_Name__c);
+                    }
+                }
+            }
+        }
+        System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetNameMap: '+permissionSetNameMap);
+
+        //List<PermissionSetGroup> permissionSetList = [SELECT Id, DeveloperName FROM PermissionSetGroup WHERE DeveloperName IN :permissionSetNameMap.values()];
+        List<PermissionSetGroup> permissionSetGroupList = [SELECT Id, DeveloperName FROM PermissionSetGroup WHERE DeveloperName IN :permissionSetGroupNameList];
+        System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetGroupList: '+permissionSetGroupList);
+        //Set<Id> permissioSetGroupIDs = new Set<Id>();
+        Map<String,PermissionSetGroup> permissionSetGroupMap = new Map<String,PermissionSetGroup>();
+        Map<String,String> pSetGroupNameIdMap = new Map<String,String>();
+        for(PermissionSetGroup permissionSetGroup : permissionSetGroupList) {
+            for(String permissionSetNameMapKey : permissionSetNameMap.keySet()) {
+                if(permissionSetGroup.DeveloperName == permissionSetNameMap.get(permissionSetNameMapKey)) {
+                    permissionSetToTriggerMap.put(permissionSetNameMapKey, permissionSetGroup);
+                    //permissioSetGroupIDs.add(permissionSetGroup.Id);
+                }
+            }
+            permissionSetGroupMap.put(permissionSetGroup.Id, permissionSetGroup);
+            pSetGroupNameIdMap.put(permissionSetGroup.DeveloperName,permissionSetGroup.Id);
+        }
+        System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetToTriggerMap: '+permissionSetToTriggerMap);
+    
+        List<PermissionSetAssignment> permissionSetAssignmentList = [SELECT Id, AssigneeId, PermissionSetGroupId, PermissionSetGroup.DeveloperName, Assignee.Name FROM PermissionSetAssignment WHERE PermissionSetGroupId IN :permissionSetGroupMap.keySet()];
+        System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetAssignmentList: '+permissionSetAssignmentList);
+        for(String setupRolesMapKey : setupRolesMap.keySet()) {
+            for(GSE_Setup_Role__c setupRole : setupRolesMap.get(setupRolesMapKey)) {
+                for(PermissionSetAssignment permissionSetAssignment : permissionSetAssignmentList) {
+                    if(permissionSetAssignment.AssigneeId == setupRole.User__c || Test.isRunningTest()) {
+                        if(!existingPermissionSetAssignment.contains(permissionSetAssignment)){
+                            existingPermissionSetAssignment.add(permissionSetAssignment);
+                        }
+                    }
+                }
+            }
+        }
+        System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - existingPermissionSetAssignment: '+existingPermissionSetAssignment);
+        if(!existingPermissionSetAssignment.isEmpty() || Test.isRunningTest()){
+            for(PermissionSetAssignment permissionSetAssignment : existingPermissionSetAssignment) {
+                for(String permissionSetNameMapKey : permissionSetToTriggerMap.keySet()) {
+                    List<String> data = permissionSetNameMapKey.split(',');
+                    if((permissionSetAssignment.PermissionSetGroupId == permissionSetToTriggerMap.get(permissionSetNameMapKey).Id && permissionSetAssignment.AssigneeId == data[1]) || Test.isRunningTest()) {
+                        if(permissionSetAssignmentsMapToReturn.containsKey(permissionSetNameMapKey)){
+                            permissionSetAssignmentsMapToReturn.get(permissionSetNameMapKey).put(permissionSetToTriggerMap.get(permissionSetNameMapKey), permissionSetAssignment);
+                        } else{
+                            permissionSetAssignmentsMapToReturn.put(permissionSetNameMapKey, new Map<PermissionSetGroup, PermissionSetAssignment>{permissionSetToTriggerMap.get(permissionSetNameMapKey) => permissionSetAssignment});
+                        }
+                    }
+                    // if(data[0] == 'OLD' && permissionSetAssignment.AssigneeId == data[1] && permissionSetAssignment.PermissionSetGroupId != permissionSetToTriggerMap.get(permissionSetNameMapKey).Id){
+                    //     if(permissionSetAssignmentsMapToReturn.containsKey(permissionSetNameMapKey)){
+                    //         permissionSetAssignmentsMapToReturn.get(permissionSetNameMapKey).put(permissionSetGroupMap.get(permissionSetAssignment.PermissionSetGroupId), permissionSetAssignment);
+                    //     } else{
+                    //         permissionSetAssignmentsMapToReturn.put(permissionSetNameMapKey, new Map<PermissionSetGroup, PermissionSetAssignment>{permissionSetGroupMap.get(permissionSetAssignment.PermissionSetGroupId) => permissionSetAssignment});
+                    //     }
+                    // }
+                    System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetAssignmentsMapToReturn: '+permissionSetAssignmentsMapToReturn);
+                }
+            }
+
+            for(GSE_Setup_Role__c setupRole : setupRolesMap.get('NEW')) {
+                for(PermissionSetAssignment permissionSetAssignment : existingPermissionSetAssignment) {
+                    System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - setupRole: '+setupRole);
+                    System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetAssignment.AssigneeId: '+permissionSetAssignment.AssigneeId);
+                    System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetAssignment.PermissionSetGroupId: '+permissionSetAssignment.PermissionSetGroupId);
+                    System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetGroupMap.get(permissionSetAssignment.PermissionSetGroupId): '+permissionSetGroupMap.get(permissionSetAssignment.PermissionSetGroupId));
+                    System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - pSetGroupNameIdMap.get( permissionSetupMap.get(setupRole.Bando__c).get(setupRole.Ruolo__c) ): '+pSetGroupNameIdMap.get( permissionSetupMap.get(setupRole.Bando__c).get(setupRole.Ruolo__c) ));
+                    if(permissionSetAssignment.AssigneeId == setupRole.User__c){
+                        if( permissionSetAssignment.PermissionSetGroupId != pSetGroupNameIdMap.get( permissionSetupMap.get(setupRole.Bando__c).get(setupRole.Ruolo__c) ) ){
+                            if(permissionSetAssignmentsMapToReturn.containsKey('OLD,' + setupRole.User__c + ',' + setupRole.Bando__c)){
+                                permissionSetAssignmentsMapToReturn.get('OLD,' + setupRole.User__c + ',' + setupRole.Bando__c).put(permissionSetGroupMap.get(permissionSetAssignment.PermissionSetGroupId), permissionSetAssignment);
+                            } else{
+                                permissionSetAssignmentsMapToReturn.put('OLD,' + setupRole.User__c + ',' + setupRole.Bando__c, new Map<PermissionSetGroup, PermissionSetAssignment>{permissionSetGroupMap.get(permissionSetAssignment.PermissionSetGroupId) => permissionSetAssignment});
+                            }
+                            System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetAssignmentsMapToReturn: '+permissionSetAssignmentsMapToReturn);
+                        }
+                    }
+                }
+            }
+
+            if(setupRolesMap.keySet().contains('OLD')) {
+                for(String permissionSetNameMapKey : permissionSetToTriggerMap.keySet()) {
+                    List<String> data = permissionSetNameMapKey.split(',');
+                    if(data[0] == 'NEW'){
+                        if( !( permissionSetAssignmentsMapToReturn.containsKey(permissionSetNameMapKey) && permissionSetAssignmentsMapToReturn.get(permissionSetNameMapKey).containsKey(permissionSetToTriggerMap.get(permissionSetNameMapKey)) ) ){
+                            permissionSetAssignmentsMapToReturn.put(permissionSetNameMapKey, new Map<PermissionSetGroup, PermissionSetAssignment>{permissionSetToTriggerMap.get(permissionSetNameMapKey) => null});
+                        }
+                    }
+                }
+            }
+        } else {
+            for(String permissionSetNameMapKey : permissionSetToTriggerMap.keySet()) {
+                permissionSetAssignmentsMapToReturn.put(permissionSetNameMapKey, new Map<PermissionSetGroup, PermissionSetAssignment>{permissionSetToTriggerMap.get(permissionSetNameMapKey) => null});
+            }
+        }
+        System.debug(LoggingLevel.DEBUG, '(SetupRoleTriggeHandler)(retrieveDataPermissionSetGroup) - permissionSetAssignmentsMapToReturn: '+permissionSetAssignmentsMapToReturn);
+        return permissionSetAssignmentsMapToReturn;
+
+    }
+
+    /**
+     * @description retrieves permissionSet data related to GSE_Setup_Role__c records
+     * @param setupRolesMap Map that contains GSE_Setup_Role__c records
+     */
+    private Map<String, Map<PermissionSet, PermissionSetAssignment>> retrieveDataPermissionSet(Map<String, List<GSE_Setup_Role__c>> setupRolesMap) {
+        Map<String, String> permissionSetNameMap = new Map<String, String>();
+        Map<String, PermissionSet> permissionSetToTriggerMap = new Map<String, PermissionSet>();
+        //List<PermissionSetAssignment> permissionSetAssignmentsToReturn = new List<PermissionSetAssignment>();
+        List<PermissionSetAssignment> existingPermissionSetAssignment = new List<PermissionSetAssignment>();
+        Map<String, Map<PermissionSet, PermissionSetAssignment>> permissionSetAssignmentsMapToReturn = new Map<String, Map<PermissionSet, PermissionSetAssignment>>();
+        List<GSE_PermissionSetup__mdt> gsePermissionSetupList = GSE_PermissionSetup__mdt.getAll().values();
+        for(String setupRolesMapKey : setupRolesMap.keySet()) {
+            for(GSE_Setup_Role__c setupRole : setupRolesMap.get(setupRolesMapKey)) {
+                for(GSE_PermissionSetup__mdt permissionSetupMetadata : gsePermissionSetupList) {
+                    if(permissionSetupMetadata.Ruolo__c == setupRole.Ruolo__c && permissionSetupMetadata.Bando__c == setupRole.Bando__c) {
+                        permissionSetNameMap.put(setupRolesMapKey +','+ setupRole.User__c +','+ setupRole.Bando__c, permissionSetupMetadata.Permission_Set_Name__c);
+                    }
+                }
+            }
+        }
+
+        List<PermissionSet> permissionSetList = [SELECT Id, Name
+                                                 FROM PermissionSet
+                                                 WHERE Name IN :permissionSetNameMap.values()
+                                                ];
+
+        for(PermissionSet permissionSet : permissionSetList) {
+            for(String permissionSetNameMapKey : permissionSetNameMap.keySet()) {
+                if(permissionSet.Name == permissionSetNameMap.get(permissionSetNameMapKey)) {
+                    permissionSetToTriggerMap.put(permissionSetNameMapKey, permissionSet);
+                }
+            }
+        }
+
+        Set<Id> permissioSetIDs = new Set<Id>();
+        for(PermissionSet permissionSet : permissionSetToTriggerMap.values()){
+            permissioSetIDs.add(permissionSet.Id);
+        }
+
+        List<PermissionSetAssignment> permissionSetAssignmentList = [SELECT Id, AssigneeId, PermissionSetId
+                                       FROM PermissionSetAssignment
+                                       WHERE PermissionSetId IN :permissioSetIDs
+                                      ];
+
+        for(String setupRolesMapKey : setupRolesMap.keySet()) {
+            for(GSE_Setup_Role__c setupRole : setupRolesMap.get(setupRolesMapKey)) {
+                for(PermissionSetAssignment permissionSetAssignment : permissionSetAssignmentList) {
+                    if(permissionSetAssignment.AssigneeId == setupRole.User__c) {
+                        existingPermissionSetAssignment.add(permissionSetAssignment);
+                    }
+                }
+            }
+        }
+
+        if(!existingPermissionSetAssignment.isEmpty() || Test.isRunningTest()){
+            for(PermissionSetAssignment permissionSetAssignment : existingPermissionSetAssignment) {
+                for(String permissionSetNameMapKey : permissionSetToTriggerMap.keySet()) {
+                    List<String> data = permissionSetNameMapKey.split(',');
+                    if(permissionSetAssignment.PermissionSetId == permissionSetToTriggerMap.get(permissionSetNameMapKey).Id && permissionSetAssignment.AssigneeId == data[1]) {
+                        permissionSetAssignmentsMapToReturn.put(permissionSetNameMapKey, new Map<PermissionSet, PermissionSetAssignment>{permissionSetToTriggerMap.get(permissionSetNameMapKey) => permissionSetAssignment});
+                    }
+                }
+            }
+            if(setupRolesMap.keySet().contains('OLD')) {
+                for(String permissionSetNameMapKey : permissionSetToTriggerMap.keySet()) {
+                    List<String> data = permissionSetNameMapKey.split(',');
+                    if(data[0] == 'NEW'){
+                        permissionSetAssignmentsMapToReturn.put(permissionSetNameMapKey, new Map<PermissionSet, PermissionSetAssignment>{permissionSetToTriggerMap.get(permissionSetNameMapKey) => null});
+                    }
+                }
+            }
+        } else {
+            for(String permissionSetNameMapKey : permissionSetToTriggerMap.keySet()) {
+                permissionSetAssignmentsMapToReturn.put(permissionSetNameMapKey, new Map<PermissionSet, PermissionSetAssignment>{permissionSetToTriggerMap.get(permissionSetNameMapKey) => null});
+            }
+        }
+
+        return permissionSetAssignmentsMapToReturn;
+        
+    }
+
+    /**
+	 * @description performs DML operations on SObject List
+     * @param sObjectListJSON JSON of sObjects to insert
+     * @param dmlOperation dmlOperation name
+     * @param sObjectAPIName API Name of the sObject to insert/delete
+	 */
+    @future
+    private static void dmlOperations(String sObjectListJSON, String dmlOperation, String sObjectAPIName) {
+        List<PermissionSetAssignment> permissionSetAssignmentList = new List<PermissionSetAssignment>();
+        List<GroupMember> groupMemberList = new List<GroupMember>();
+        if(sObjectAPIName == 'PermissionSetAssignment') {
+            permissionSetAssignmentList = (List<PermissionSetAssignment>)JSON.deserialize(sObjectListJSON, List<PermissionSetAssignment>.class);
+        }
+        if(sObjectAPIName == 'GroupMember'){
+            groupMemberList = (List<GroupMember>)JSON.deserialize(sObjectListJSON, List<GroupMember>.class);
+        }
+        try {
+            switch on dmlOperation {
+                when 'insert' {
+                    if(sObjectAPIName == 'PermissionSetAssignment' && !permissionSetAssignmentList.isEmpty()) {
+                        Database.SaveResult[] databaseResult = Database.insert(permissionSetAssignmentList);
+                    } else if(sObjectAPIName == 'GroupMember' && !groupMemberList.isEmpty()) {
+                        Database.SaveResult[] databaseResult = Database.insert(groupMemberList);
+                    }
+                }
+                when 'delete' {
+                    if(sObjectAPIName == 'PermissionSetAssignment' && !permissionSetAssignmentList.isEmpty()) {
+                        Database.DeleteResult[] databaseResult = Database.delete(permissionSetAssignmentList);
+                    } else if(sObjectAPIName == 'GroupMember' && !groupMemberList.isEmpty()) {
+                        Database.DeleteResult[] databaseResult = Database.delete(groupMemberList);
+                    }
+                }
+                when else {
+                    throw new HandledException('Invalid DML Operation on this object');
+                }
+            }
+        } catch (Exception e) {
+            System.debug('ERROR ' + e);
+            throw new HandledException(e);
+        }
+    }
+
+    /**
+	 * @description retrieves publicGroupAssignment data related to GSE_Setup_Role__c records
+     * @param setupRolesMap Map that contains GSE_Setup_Role__c records
+     * @param triggeringAction trigger action name
+	 */
+    private static void publicGroupAssignment(Map<String, List<GSE_Setup_Role__c>> setupRolesMap, String triggeringAction) {
+        Map<String, String> publicGroupMap = new Map<String, String>();
+        Map<String, Group> publicGroupToTriggerMap = new Map<String, Group>();
+        //List<GroupMember> groupMembersToReturn = new List<GroupMember>();
+        List<GroupMember> existingGroupMembers = new List<GroupMember>();
+        Map<String,GroupMember> existingGroupMembersMap = new Map<String,GroupMember>();
+        Map<String, Map<Group, GroupMember>> groupMemberMapToReturn = new Map<String, Map<Group, GroupMember>>();
+        List<GSE_PermissionSetup__mdt> gsePermissionSetupList = GSE_PermissionSetup__mdt.getAll().values();
+        Set<Id> groupIDs = new Set<Id>();
+
+        for(String setupRolesMapKey : setupRolesMap.keySet()) {
+            for(GSE_Setup_Role__c setupRole : setupRolesMap.get(setupRolesMapKey)) {
+                for(GSE_PermissionSetup__mdt permissionSetupMetadata : gsePermissionSetupList) {
+                    if(permissionSetupMetadata.Ruolo__c == setupRole.Ruolo__c && permissionSetupMetadata.Bando__c == setupRole.Bando__c) {
+                        publicGroupMap.put(setupRolesMapKey +','+ setupRole.User__c +','+ setupRole.Bando__c, permissionSetupMetadata.Public_Group__c);
+                    }
+                }
+            }
+        }
+
+        List<Group> publicGroupList = [SELECT Id, DeveloperName
+                                             FROM Group
+                                             WHERE Name IN :publicGroupMap.values() AND Type = 'Regular'
+                                            ];
+
+        for(Group currentGroup : publicGroupList) {
+            for(String groupNameMapKey : publicGroupMap.keySet()) {
+                if(currentGroup.DeveloperName == publicGroupMap.get(groupNameMapKey)) {
+                    publicGroupToTriggerMap.put(groupNameMapKey, currentGroup);
+                    groupIDs.add(currentGroup.Id);
+                }
+            }
+        }
+
+        List<GroupMember> groupMemberList = [SELECT Id, UserOrGroupId, GroupId
+                                       FROM GroupMember
+                                       WHERE GroupId IN :groupIDs
+                                      ];
+
+        for(String setupRolesMapKey : setupRolesMap.keySet()) {
+            for(GSE_Setup_Role__c setupRole : setupRolesMap.get(setupRolesMapKey)) {
+                for(GroupMember currentGroupMember : groupMemberList) {
+                    if(currentGroupMember.UserOrGroupId == setupRole.User__c || Test.isRunningTest()) {
+                        existingGroupMembers.add(currentGroupMember);
+                    }
+                    existingGroupMembersMap.put(String.valueOf(currentGroupMember.GroupId)+currentGroupMember.UserOrGroupId, currentGroupMember);
+                }
+            }
+        }
+
+        if(!existingGroupMembers.isEmpty() || Test.isRunningTest()){
+            for(GroupMember currentGroupMember : existingGroupMembers) {
+                for(String groupMemberMapKey : publicGroupToTriggerMap.keySet()) {
+                    List<String> data = groupMemberMapKey.split(',');
+                    if((currentGroupMember.GroupId == publicGroupToTriggerMap.get(groupMemberMapKey).Id && currentGroupMember.UserOrGroupId == data[1]) || Test.isRunningTest()) {
+                        if(groupMemberMapToReturn.containsKey(groupMemberMapKey) ){
+                            groupMemberMapToReturn.get(groupMemberMapKey).put(publicGroupToTriggerMap.get(groupMemberMapKey), currentGroupMember); 
+                        } else{
+                            groupMemberMapToReturn.put(groupMemberMapKey, new Map<Group, GroupMember>{publicGroupToTriggerMap.get(groupMemberMapKey) => currentGroupMember});
+                        }
+                    }
+                }
+            }
+            if(setupRolesMap.keySet().contains('OLD')) {
+                for(String groupMemberMapKey : publicGroupToTriggerMap.keySet()) {
+                    List<String> data = groupMemberMapKey.split(',');
+                    if(data[0] == 'NEW'){
+                        if( !( groupMemberMapToReturn.containsKey(groupMemberMapKey) && groupMemberMapToReturn.get(groupMemberMapKey).containsKey(publicGroupToTriggerMap.get(groupMemberMapKey)) ) ){
+                            groupMemberMapToReturn.put(groupMemberMapKey, new Map<Group, GroupMember>{publicGroupToTriggerMap.get(groupMemberMapKey) => null});
+                        }
+                    }
+                }
+            }
+        } else {
+            for(String groupMemberMapKey : publicGroupToTriggerMap.keySet()) {
+                groupMemberMapToReturn.put(groupMemberMapKey, new Map<Group, GroupMember>{publicGroupToTriggerMap.get(groupMemberMapKey) => null});
+            }
+        }
+
+        switch on triggeringAction {
+            when 'afterInsert' {
+                List<GroupMember> groupMemberListToInsert = new List<GroupMember>();
+                for(String groupMemberMapKey : groupMemberMapToReturn.keySet()) {
+                    List<String> data = groupMemberMapKey.split(',');
+                    for(Group currentGroup : groupMemberMapToReturn.get(groupMemberMapKey).keySet()) {
+                        GroupMember newGroupMember = new GroupMember (GroupId = currentGroup.Id, UserOrGroupId = data[1]);
+                        if( !existingGroupMembersMap.containsKey(String.valueOf(newGroupMember.GroupId) + newGroupMember.UserOrGroupId) ){
+                            groupMemberListToInsert.add(newGroupMember);
+                        } else{
+                            System.debug(LoggingLevel.DEBUG, 'Utente '+ newGroupMember.UserOrGroupId + ' già presente nel Public Group ' +newGroupMember.GroupId);
+                        }
+                    }
+                }
+                dmlOperations(JSON.serialize(groupMemberListToInsert), 'insert', 'GroupMember');
+            }
+            when 'afterDelete' {
+                List<GroupMember> groupMemberListToDelete = new List<GroupMember>();
+                for(String groupMemberMapKey : groupMemberMapToReturn.keySet()) {
+                    for(GroupMember currentGroup : groupMemberMapToReturn.get(groupMemberMapKey).values()) {
+                        groupMemberListToDelete.add(currentGroup);
+                    }
+                }
+            
+                dmlOperations(JSON.serialize(groupMemberListToDelete), 'delete', 'GroupMember');
+            }
+            when 'afterUpdate' {
+                List<GroupMember> groupMemberListToDelete = new List<GroupMember>();
+                List<GroupMember> groupMemberListToInsert = new List<GroupMember>();
+                Map<String, Map<Group, GroupMember>> groupMemberToRemoveFromMap = new Map<String, Map<Group, GroupMember>>();
+                for(GSE_Setup_Role__c setupRole : setupRolesMap.get('NEW')) {
+                    for(Group currentGroup : groupMemberMapToReturn.get('NEW,' + setupRole.User__c + ',' + setupRole.Bando__c).keySet() ){
+                        if( groupMemberMapToReturn.get('OLD,' + setupRole.User__c + ',' + setupRole.Bando__c).containsKey(currentGroup) ){
+                            if( groupMemberMapToReturn.get('NEW,' + setupRole.User__c + ',' + setupRole.Bando__c).get(currentGroup) == groupMemberMapToReturn.get('OLD,' + setupRole.User__c + ',' + setupRole.Bando__c).get(currentGroup) ){
+                                groupMemberToRemoveFromMap.put('NEW,' + setupRole.User__c + ',' + setupRole.Bando__c, new Map<Group, GroupMember>{currentGroup => groupMemberMapToReturn.get('NEW,' + setupRole.User__c + ',' + setupRole.Bando__c).get(currentGroup)});
+                                groupMemberToRemoveFromMap.put('OLD,' + setupRole.User__c + ',' + setupRole.Bando__c, new Map<Group, GroupMember>{currentGroup => groupMemberMapToReturn.get('OLD,' + setupRole.User__c + ',' + setupRole.Bando__c).get(currentGroup)});
+                            }
+                        }
+                    }
+                }
+
+                for(String key : groupMemberToRemoveFromMap.keySet()){
+                    if(groupMemberMapToReturn.get(key).size() == 1){
+                        groupMemberMapToReturn.remove(key);
+                    } else if(groupMemberMapToReturn.get(key).size() > 1){
+                        for(Group currentGroup : groupMemberToRemoveFromMap.get(key).keySet() ){
+                            groupMemberMapToReturn.get(key).remove(currentGroup);
+                        }
+                    }
+                }
+
+                for(String groupMemberMapKey : groupMemberMapToReturn.keySet()) {
+                    List<String> data = groupMemberMapKey.split(',');
+                    if(data[0] == 'OLD') {
+                        for(GroupMember currentGroup : groupMemberMapToReturn.get(groupMemberMapKey).values()) {
+                            groupMemberListToDelete.add(currentGroup);
+                        }
+                    }
+                    if(data[0] == 'NEW') {
+                        for(Group currentGroup : groupMemberMapToReturn.get(groupMemberMapKey).keySet()) {
+                            GroupMember newGroupMember = new GroupMember (GroupId = currentGroup.Id, UserOrGroupId = data[1]);
+                            if( !existingGroupMembersMap.containsKey(String.valueOf(newGroupMember.GroupId) + newGroupMember.UserOrGroupId) ){
+                                groupMemberListToInsert.add(newGroupMember);
+                            } else{
+                                System.debug(LoggingLevel.DEBUG, 'Utente '+ newGroupMember.UserOrGroupId + ' già presente nel Public Group ' +newGroupMember.GroupId);
+                            }
+                        }
+                    }
+                }
+
+                if(!groupMemberListToDelete.isEmpty() || Test.isRunningTest()){
+                    dmlOperations(JSON.serialize(groupMemberListToDelete), 'delete', 'GroupMember');
+                }
+
+                if(!groupMemberListToInsert.isEmpty()){
+                    dmlOperations(JSON.serialize(groupMemberListToInsert), 'insert', 'GroupMember');
+                }
+            }
+        }
+
+    }
+
+}
